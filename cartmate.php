@@ -1,139 +1,88 @@
 <?php
 /**
- * Plugin Name: WPCartMate
- * Description: Email & SMS recovery for WooCommerce abandoned carts.
+ * Plugin Name: CartMate
+ * Description: Shopping cart management plugin for WooCommerce
  * Version: 1.0.0
- * Author: Hustlemate
+ * Author: WP Clinic
  * Text Domain: cartmate
+ * Domain Path: /languages
  */
 
-if ( ! defined( 'ABSPATH' ) ) {
+// Prevent direct access
+if (!defined('ABSPATH')) {
     exit;
 }
 
-/**
- * Basic constants.
- */
-define( 'CARTMATE_VERSION', '1.0.0' );
-define( 'CARTMATE_PLUGIN_FILE', __FILE__ );
-define( 'CARTMATE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
-define( 'CARTMATE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
+// Define plugin constants
+define('CARTMATE_VERSION', '1.0.0');
+define('CARTMATE_DIR', plugin_dir_path(__FILE__));
+define('CARTMATE_URL', plugin_dir_url(__FILE__));
+define('CARTMATE_BASENAME', plugin_basename(__FILE__));
+
+// Include required files (no duplicates)
+require_once CARTMATE_DIR . 'includes/class-cartmate-admin.php';
+require_once CARTMATE_DIR . 'includes/class-cartmate-frontend.php';
+require_once CARTMATE_DIR . 'includes/class-cartmate-cron.php';
+require_once CARTMATE_DIR . 'includes/functions.php';
 
 /**
- * Includes (DB first so activation + upgrades always work).
+ * Initialize CartMate Plugin
  */
-require_once CARTMATE_PLUGIN_DIR . 'includes/class-cartmate-db.php';
-require_once __DIR__ . '/includes/class-cartmate-capture.php';
-
-
-/**
- * Your existing includes may differ. Keep these paths aligned with YOUR plugin.
- * If any file name differs, update the require_once path (do not partially paste).
- */
- // Emailer (contains send_recovery_email + wp_mail logic).
-if ( file_exists( CARTMATE_PLUGIN_DIR . 'includes/class-cartmate-emailer.php' ) ) {
-    require_once CARTMATE_PLUGIN_DIR . 'includes/class-cartmate-emailer.php';
-}
-if ( file_exists( CARTMATE_PLUGIN_DIR . 'includes/class-cartmate-core.php' ) ) {
-    require_once CARTMATE_PLUGIN_DIR . 'includes/class-cartmate-core.php';
-}
-
-if ( file_exists( CARTMATE_PLUGIN_DIR . 'includes/class-cartmate-email.php' ) ) {
-    require_once CARTMATE_PLUGIN_DIR . 'includes/class-cartmate-email.php';
-}
-
-if ( file_exists( CARTMATE_PLUGIN_DIR . 'includes/class-cartmate-sms.php' ) ) {
-    require_once CARTMATE_PLUGIN_DIR . 'includes/class-cartmate-sms.php';
-}
-
-if ( file_exists( CARTMATE_PLUGIN_DIR . 'includes/class-cartmate-cron.php' ) ) {
-    require_once CARTMATE_PLUGIN_DIR . 'includes/class-cartmate-cron.php';
-}
-
-if ( file_exists( CARTMATE_PLUGIN_DIR . 'includes/admin/class-cartmate-admin.php' ) ) {
-    require_once CARTMATE_PLUGIN_DIR . 'includes/admin/class-cartmate-admin.php';
-}
-if ( file_exists( CARTMATE_PLUGIN_DIR . 'includes/class-cartmate-cron.php' ) ) {
-    require_once CARTMATE_PLUGIN_DIR . 'includes/class-cartmate-cron.php';
-}
-add_action( 'plugins_loaded', function () {
-    if ( class_exists( 'CartMate_Cron' ) ) {
-        static $cartmate_cron = null;
-        if ( null === $cartmate_cron ) {
-            $cartmate_cron = new CartMate_Cron();
-        }
+function cartmate_init() {
+    // Load text domain for translations
+    load_plugin_textdomain('cartmate', false, dirname(CARTMATE_BASENAME) . '/languages');
+    
+    // Initialize admin functionality
+    if (is_admin()) {
+        new CartMate_Admin();
     }
-} );
-
-/**
- * Optional: plugin-local capture helpers file (you told me you have it in the plugin root).
- */
-if ( file_exists( CARTMATE_PLUGIN_DIR . 'cartmate-functions.php' ) ) {
-    require_once CARTMATE_PLUGIN_DIR . 'cartmate-functions.php';
+    
+    // Initialize frontend functionality
+    new CartMate_Frontend();
+    
+    // Initialize cron scheduler
+    new CartMate_Cron();
 }
 
+add_action('plugins_loaded', 'cartmate_init');
+
 /**
- * Activation hook: ensure schema is installed and cron is scheduled by core (if applicable).
+ * Activation Hook
  */
 function cartmate_activate() {
-    if ( class_exists( 'CartMate_DB' ) ) {
-        CartMate_DB::install();
+    // Schedule cron event on activation
+    if (!wp_next_scheduled('cartmate_daily_cleanup')) {
+        wp_schedule_event(time(), 'daily', 'cartmate_daily_cleanup');
     }
-
-    // If your core schedules cron, we don't do it here.
-    // If not, you can schedule your processing event here as a fallback.
-    if ( ! wp_next_scheduled( 'cartmate_process_abandoned_carts' ) ) {
-        wp_schedule_event( time() + 120, 'minute', 'cartmate_process_abandoned_carts' );
-    }
-
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        error_log( 'Cart Mate: activation complete.' );
-    }
+    
+    // Flush rewrite rules
+    flush_rewrite_rules();
 }
-register_activation_hook( __FILE__, 'cartmate_activate' );
+
+register_activation_hook(__FILE__, 'cartmate_activate');
 
 /**
- * Deactivation hook: clear cron.
+ * Deactivation Hook
  */
 function cartmate_deactivate() {
-    $ts = wp_next_scheduled( 'cartmate_process_abandoned_carts' );
-    while ( $ts ) {
-        wp_unschedule_event( $ts, 'cartmate_process_abandoned_carts' );
-        $ts = wp_next_scheduled( 'cartmate_process_abandoned_carts' );
+    // Clear scheduled cron events
+    $timestamp = wp_next_scheduled('cartmate_daily_cleanup');
+    if ($timestamp) {
+        wp_unschedule_event($timestamp, 'cartmate_daily_cleanup');
     }
-
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        error_log( 'Cart Mate: deactivation complete (cron cleared).' );
-    }
+    
+    // Flush rewrite rules
+    flush_rewrite_rules();
 }
-register_deactivation_hook( __FILE__, 'cartmate_deactivate' );
+
+register_deactivation_hook(__FILE__, 'cartmate_deactivate');
 
 /**
- * Ensure DB upgrades run early.
+ * Handle cron event
  */
-add_action( 'plugins_loaded', function() {
-    if ( class_exists( 'CartMate_DB' ) ) {
-        CartMate_DB::maybe_upgrade();
-    }
-}, 5 );
+add_action('cartmate_daily_cleanup', 'cartmate_handle_daily_cleanup');
 
-/**
- * Bootstrap plugin runtime.
- */
-function cartmate_bootstrap() {
-
-    // Admin UI
-    if ( is_admin() && class_exists( 'CartMate_Admin' ) ) {
-        // Your admin class uses static init() (as per the file you pasted).
-        CartMate_Admin::init();
-    }
-
-    // Core runtime
-    if ( class_exists( 'CartMate_Core' ) ) {
-        CartMate_Core::init();
-    }
-    if ( class_exists( 'CartMate_Capture' ) ) {
-	CartMate_Capture::init();
+function cartmate_handle_daily_cleanup() {
+    // Call the cron handler from the CartMate_Cron class
+    CartMate_Cron::handle_daily_cleanup();
 }
-}
-add_action( 'plugins_loaded', 'cartmate_bootstrap', 20 );
